@@ -5,7 +5,7 @@ import argparse
 import sqlite3
 import sys
 
-from garmindash import db, export, fit, fitnotes
+from garmindash import corrections, db, export, fit, fitnotes
 
 STATUS_MARK = {"used": "USED", "known": "known", "unrecognised": "FLAG",
                "skipped": "skip", "error": "ERROR"}
@@ -90,6 +90,48 @@ def _print_report(rep, depth, show_all) -> None:
             print(f"{pad}    ... {hidden} more entries not flagged (use --all to list)")
 
 
+def _fmt_set(r) -> str:
+    parts = [f"set {r['set_number']}"]
+    if r["weight"] is not None:
+        parts.append(f"{r['weight']:g} {r['weight_unit'] or ''}".strip())
+    if r["reps"] is not None:
+        parts.append(f"x{r['reps']}")
+    if r["distance"] is not None:
+        parts.append(f"{r['distance']:g} {r['distance_unit'] or ''}".strip())
+    if r["time_seconds"] is not None:
+        parts.append(f"{r['time_seconds']}s")
+    if r["comment"]:
+        parts.append(repr(r["comment"]))
+    return "  ".join(parts)
+
+
+def cmd_correct_workout(args) -> int:
+    conn = db.connect(args.db)
+    try:
+        date = corrections.parse_day(args.date)
+        if args.set is None:
+            rows = corrections.sets_for(conn, date, args.exercise)
+            if not rows:
+                print(f"no sets of {args.exercise!r} on {date}")
+                return 1
+            print(f"{rows[0]['exercise']} on {date}:")
+            for r in rows:
+                print(f"  {_fmt_set(r)}")
+            return 0
+        if not args.changes:
+            raise corrections.CorrectionError("give at least one field=value, "
+                                              "e.g. distance_unit=mi")
+        changes = dict(corrections.parse_assignment(c) for c in args.changes)
+        before, after = corrections.add(conn, date, args.exercise, args.set, changes, args.note)
+    except corrections.CorrectionError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    for name in after:
+        print(f"{name}: {before[name]!r} -> {after[name]!r}")
+    print("saved; it will be re-applied on future backup imports")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m garmindash",
                                 description="Import Garmin and FitNotes data into SQLite.")
@@ -112,6 +154,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--date-format", default=None,
                     help="CSV only: strptime format if dates are not YYYY-MM-DD, e.g. %%d/%%m/%%Y")
     sp.set_defaults(func=cmd_import_fitnotes)
+
+    sp = with_db(sub.add_parser(
+        "correct-workout", help="fix a FitNotes set that can't be edited in the app",
+        description="Without SET, list that day's sets for the exercise. With SET and "
+                    "field=value pairs, save a correction that survives re-imports. "
+                    f"Fields: {', '.join(corrections.FIELDS)}. 'field=' sets it empty."))
+    sp.add_argument("date", help="YYYY-MM-DD or M-D-YYYY")
+    sp.add_argument("exercise", help='exercise name, quoted, e.g. "Running (Outdoor)"')
+    sp.add_argument("set", nargs="?", type=int, help="set number shown by the listing")
+    sp.add_argument("changes", nargs="*", metavar="field=value")
+    sp.add_argument("--note", help="why (stored with the correction)")
+    sp.set_defaults(func=cmd_correct_workout)
 
     sp = sub.add_parser("inspect", help="list an export's files and flag unknown ones")
     sp.add_argument("zip")

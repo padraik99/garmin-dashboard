@@ -135,6 +135,29 @@ Mixing the two is safe. A later backup import takes over matching CSV rows
 instead of duplicating them, and a CSV import never overwrites rows that came
 from a backup.
 
+### `correct-workout <date> <exercise> [set field=value ...]`
+
+For FitNotes sets you can't fix in the app. List a day's sets for an exercise
+to see the set numbers:
+
+```bash
+python -m garmindash correct-workout 4-21-2026 "Running (Outdoor)"
+```
+
+Then correct one:
+
+```bash
+python -m garmindash correct-workout 4-21-2026 "Running (Outdoor)" 1 distance_unit=mi --note "logged as m by mistake"
+```
+
+Dates are `YYYY-MM-DD` or `M-D-YYYY`, and exercise names ignore case. The
+fields you can correct are `category`, `weight`, `weight_unit`, `reps`,
+`distance`, `distance_unit`, `time_seconds` and `comment`; `field=` empties
+one. Corrections are stored in `workout_corrections` and re-applied on every
+later backup import, so a newer backup never undoes them. To change one, run
+the command again with the new value. Only sets imported from a `.fitnotes`
+backup can be corrected, because CSV rows have no stable id.
+
 ## Tables
 
 All timestamps ending `_utc` are ISO 8601 UTC with a `Z` suffix
@@ -208,6 +231,10 @@ series for the dashboard.
 | `distance`, `distance_unit` | as typed in FitNotes. Backup unit codes: 2 = `m`, 5 = `mi`; any other code is stored as `fitnotes_unit_<code>` and reported on import |
 | `time_seconds` | |
 | `comment` | |
+
+### `workout_corrections` (key: `(fitnotes_id, field)`)
+
+Manual fixes from `correct-workout`: `fitnotes_id`, `field`, `value`, `note`.
 
 ## Tests
 

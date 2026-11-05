@@ -80,6 +80,15 @@ CREATE TABLE IF NOT EXISTS workouts (
 CREATE UNIQUE INDEX IF NOT EXISTS workouts_csv_key
     ON workouts(date, exercise, set_number) WHERE fitnotes_id IS NULL;
 
+-- Manual fixes (python -m garmindash correct-workout), re-applied on every backup import.
+CREATE TABLE IF NOT EXISTS workout_corrections (
+    fitnotes_id INTEGER NOT NULL,
+    field       TEXT NOT NULL,
+    value,
+    note        TEXT,
+    PRIMARY KEY (fitnotes_id, field)
+);
+
 CREATE INDEX IF NOT EXISTS activities_start ON activities(start_utc);
 """
 

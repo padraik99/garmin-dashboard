@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from garmindash import corrections
+
 COLUMN_ALIASES = {
     "date": ("date", "workout date"),
     "exercise": ("exercise", "exercise name"),
@@ -289,6 +291,9 @@ def read_backup(path: str | Path) -> list[dict]:
 def import_fitnotes_backup(conn: sqlite3.Connection, path: str | Path) -> FitNotesResult:
     res = FitNotesResult()
     rows = read_backup(path)
+    fixes = corrections.load(conn)
+    for row in rows:
+        row.update(fixes.get(row["fitnotes_id"], {}))
     cols = ("set_number",) + VALUE_COLS
     for row in rows:
         existing = conn.execute(
