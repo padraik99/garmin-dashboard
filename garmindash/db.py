@@ -63,9 +63,10 @@ CREATE TABLE IF NOT EXISTS breathe_sessions (
 
 CREATE TABLE IF NOT EXISTS workouts (
     id            INTEGER PRIMARY KEY,
+    fitnotes_id   INTEGER UNIQUE,      -- training_log._id from a .fitnotes backup; NULL for CSV rows
     date          TEXT NOT NULL,
     exercise      TEXT NOT NULL,
-    set_number    INTEGER NOT NULL,    -- 1-based position within (date, exercise) in the CSV
+    set_number    INTEGER NOT NULL,    -- 1-based position within (date, exercise)
     category      TEXT,
     weight        REAL,
     weight_unit   TEXT,                -- 'kg' or 'lb'
@@ -73,9 +74,11 @@ CREATE TABLE IF NOT EXISTS workouts (
     distance      REAL,
     distance_unit TEXT,
     time_seconds  INTEGER,
-    comment       TEXT,
-    UNIQUE (date, exercise, set_number)
+    comment       TEXT
 );
+-- CSV rows have no stable id, so they are keyed by position instead.
+CREATE UNIQUE INDEX IF NOT EXISTS workouts_csv_key
+    ON workouts(date, exercise, set_number) WHERE fitnotes_id IS NULL;
 
 CREATE INDEX IF NOT EXISTS activities_start ON activities(start_utc);
 """

@@ -103,23 +103,37 @@ Note: USB top-ups only cover **activities**. Sleep, stress, Body Battery and
 daily summaries live in the watch's monitoring/sleep FIT files, whose format is
 largely undocumented; those tables only grow with a fresh account export.
 
-### `import-fitnotes <csv>`
+### `import-fitnotes <file>`
 
 ```bash
-python -m garmindash import-fitnotes data/FitNotes_Export.csv
+python -m garmindash import-fitnotes data/FitNotes_Backup_2026_05_01_20_15_51.fitnotes
 ```
 
-Columns are matched by header name, so order and missing columns don't
-matter. Only `Date` and `Exercise` are required. Recognised headers
-(case-insensitive): `Date`, `Exercise`, `Category`, `Weight (kgs)` /
-`Weight (lbs)` / `Weight` + `Weight Unit`, `Reps`, `Distance`,
-`Distance Unit`, `Time` (`h:mm:ss`, `mm:ss` or seconds), `Comment`/`Notes`.
-Dates must be `YYYY-MM-DD` unless you pass e.g. `--date-format %d/%m/%Y`.
+Takes either FitNotes file; the type is detected from the content, not the
+extension.
 
-Re-importing a newer full export adds only new sets. Each set is keyed by
+**`.fitnotes` backup (preferred).** This is a SQLite database. It's opened
+read-only and never modified. Sets come from `training_log`, joined to
+`exercise` and `Category` for names, plus set comments from `Comment`. Each
+set keeps FitNotes' own id (`fitnotes_id`), so re-importing a newer backup
+adds new sets and updates edited ones exactly. Sets deleted in FitNotes are
+counted and reported but left in the database. Weight is FitNotes'
+`metric_weight`, stored as kg whatever unit you log in. Zero reps, distance or
+duration are stored as NULL; zero weight is kept (bodyweight exercises).
+
+**CSV spreadsheet export.** Columns are matched by header name, so order and
+missing columns don't matter. Only `Date` and `Exercise` are required.
+Recognised headers (case-insensitive): `Date`, `Exercise`, `Category`,
+`Weight (kgs)` / `Weight (lbs)` / `Weight` + `Weight Unit`, `Reps`,
+`Distance`, `Distance Unit`, `Time` (`h:mm:ss`, `mm:ss` or seconds),
+`Comment`/`Notes`. Dates must be `YYYY-MM-DD` unless you pass e.g.
+`--date-format %d/%m/%Y`. CSV rows have no id, so each set is keyed by
 (date, exercise, set number), where set number is its position among that
-day's rows for that exercise. A set edited in FitNotes since the last import
-is updated and listed; a set deleted in FitNotes stays in the database.
+day's rows for that exercise.
+
+Mixing the two is safe. A later backup import takes over matching CSV rows
+instead of duplicating them, and a CSV import never overwrites rows that came
+from a backup.
 
 ## Tables
 
@@ -183,14 +197,15 @@ ignoring case and separators, so `HR Pre` also maps to `hr_pre`.
 The Venu 2 has no overnight HRV Status, so these RMSSD readings are the HRV
 series for the dashboard.
 
-### `workouts` (key: `id`; unique: `(date, exercise, set_number)`)
+### `workouts` (key: `id`; unique: `fitnotes_id`, and `(date, exercise, set_number)` for CSV rows)
 
 | Column | Notes |
 |--------|-------|
+| `fitnotes_id` | `training_log._id` from a backup; NULL for CSV-only rows |
 | `date`, `exercise`, `set_number`, `category` | |
-| `weight`, `weight_unit` | as logged; unit `kg` or `lb` (no conversion) |
+| `weight`, `weight_unit` | backup: always kg; CSV: as logged, `kg` or `lb` (no conversion) |
 | `reps` | |
-| `distance`, `distance_unit` | |
+| `distance`, `distance_unit` | backup: raw FitNotes value, unit not yet confirmed (NULL) |
 | `time_seconds` | |
 | `comment` | |
 
@@ -199,4 +214,5 @@ series for the dashboard.
 `python -m pytest`. Fixtures are synthetic and generated at test time:
 `tests/fitwriter.py` is a small FIT encoder (written from the FIT protocol
 spec, including developer fields), and `tests/conftest.py` builds a fake
-export ZIP and fake FitNotes CSVs. No real personal data is in this repo.
+export ZIP, fake FitNotes CSVs and a fake `.fitnotes` backup
+with the app's table layout. No real personal data is in this repo.

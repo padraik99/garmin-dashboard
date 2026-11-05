@@ -1,4 +1,4 @@
-"""FitNotes (Android) CSV export -> workouts table.
+"""FitNotes (Android) CSV export or .fitnotes backup -> workouts table.
 
 Columns are matched by header name, not position. Expected (unconfirmed)
 FitNotes header: Date, Exercise, Category, Weight (kgs|lbs), Reps, Distance,
@@ -166,23 +166,41 @@ class FitNotesResult:
     updated: int = 0
     unchanged: int = 0
     updated_rows: list[str] = field(default_factory=list)
+    missing_from_source: int = 0   # backup only: sets in the db that the backup no longer has
 
 
-def import_fitnotes(conn: sqlite3.Connection, csv_path: str | Path,
+def is_backup(path: str | Path) -> bool:
+    with open(path, "rb") as f:
+        return f.read(16) == SQLITE_MAGIC
+
+
+def import_fitnotes(conn: sqlite3.Connection, path: str | Path,
                     date_format: str | None = None) -> FitNotesResult:
+    """Import a FitNotes CSV export or a .fitnotes backup (detected by content)."""
+    if is_backup(path):
+        return import_fitnotes_backup(conn, path)
+    return import_fitnotes_csv(conn, path, date_format)
+
+
+def import_fitnotes_csv(conn: sqlite3.Connection, csv_path: str | Path,
+                        date_format: str | None = None) -> FitNotesResult:
     text = Path(csv_path).read_text(encoding="utf-8-sig")
     res = FitNotesResult()
     for row in parse_rows(text, date_format):
         existing = conn.execute(
-            f"SELECT {', '.join(VALUE_COLS)} FROM workouts "
-            "WHERE date = ? AND exercise = ? AND set_number = ?",
+            f"SELECT {', '.join(VALUE_COLS)}, fitnotes_id FROM workouts "
+            "WHERE date = ? AND exercise = ? AND set_number = ? "
+            "ORDER BY fitnotes_id IS NOT NULL LIMIT 1",
             (row["date"], row["exercise"], row["set_number"])).fetchone()
+        if existing is not None and existing["fitnotes_id"] is not None:
+            res.unchanged += 1  # already imported from a backup, which wins
+            continue
         if existing is None:
             cols = list(row)
             conn.execute(f"INSERT INTO workouts ({', '.join(cols)}) "
                          f"VALUES ({', '.join('?' * len(cols))})", [row[c] for c in cols])
             res.added += 1
-        elif tuple(existing) == tuple(row[c] for c in VALUE_COLS):
+        elif tuple(existing)[:len(VALUE_COLS)] == tuple(row[c] for c in VALUE_COLS):
             res.unchanged += 1
         else:
             conn.execute(
@@ -191,5 +209,107 @@ def import_fitnotes(conn: sqlite3.Connection, csv_path: str | Path,
                 [row[c] for c in VALUE_COLS] + [row["date"], row["exercise"], row["set_number"]])
             res.updated += 1
             res.updated_rows.append(f"{row['date']} {row['exercise']} set {row['set_number']}")
+    conn.commit()
+    return res
+
+
+# ---------------------------------------------------------------- .fitnotes backup
+
+SQLITE_MAGIC = b"SQLite format 3\x00"
+
+# Assumed from the backup's schema (no FitNotes documentation): metric_weight
+# is kg, duration_seconds is seconds, Comment.owner_id = training_log._id for
+# set comments. distance units are not known yet, so distance_unit stays NULL.
+BACKUP_QUERY = """
+SELECT t._id, t.date, e.name AS exercise, c.name AS category,
+       t.metric_weight, t.reps, t.distance, t.duration_seconds
+FROM training_log t
+JOIN exercise e ON e._id = t.exercise_id
+LEFT JOIN Category c ON c._id = e.category_id
+ORDER BY t.date, e.name, t._id
+"""
+
+
+def _open_readonly(path: str | Path) -> sqlite3.Connection:
+    uri = Path(path).resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _positive(v):
+    return v if v is not None and v > 0 else None
+
+
+def read_backup(path: str | Path) -> list[dict]:
+    src = _open_readonly(path)
+    try:
+        tables = {r[0].lower() for r in src.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        missing = {"training_log", "exercise"} - tables
+        if missing:
+            raise FitNotesError(f"not a FitNotes backup: no {', '.join(sorted(missing))} table")
+        comments: dict[tuple, str] = {}
+        if "comment" in tables:
+            for r in src.execute("SELECT owner_id, date, comment FROM Comment"):
+                if r["comment"]:
+                    comments[(r["owner_id"], r["date"])] = r["comment"].strip()
+        rows, counter = [], {}
+        for r in src.execute(BACKUP_QUERY):
+            date = parse_date(str(r["date"]), None)
+            key = (date, r["exercise"])
+            counter[key] = counter.get(key, 0) + 1
+            weight = r["metric_weight"]
+            reps = _positive(r["reps"])
+            distance = _positive(r["distance"])
+            rows.append({
+                "fitnotes_id": r["_id"], "date": date, "exercise": r["exercise"],
+                "set_number": counter[key], "category": r["category"],
+                "weight": float(weight) if weight is not None else None,
+                "weight_unit": "kg" if weight is not None else None,
+                "reps": int(reps) if reps is not None else None,
+                "distance": float(distance) if distance is not None else None,
+                "distance_unit": None,
+                "time_seconds": int(_positive(r["duration_seconds"]) or 0) or None,
+                "comment": comments.get((r["_id"], r["date"])),
+            })
+        return rows
+    finally:
+        src.close()
+
+
+def import_fitnotes_backup(conn: sqlite3.Connection, path: str | Path) -> FitNotesResult:
+    res = FitNotesResult()
+    rows = read_backup(path)
+    cols = ("set_number",) + VALUE_COLS
+    for row in rows:
+        existing = conn.execute(
+            f"SELECT id, {', '.join(cols)} FROM workouts WHERE fitnotes_id = ?",
+            (row["fitnotes_id"],)).fetchone()
+        if existing is None:
+            # A CSV import of the same set: claim it rather than duplicate it.
+            existing = conn.execute(
+                f"SELECT id, {', '.join(cols)} FROM workouts WHERE fitnotes_id IS NULL "
+                "AND date = ? AND exercise = ? AND set_number = ?",
+                (row["date"], row["exercise"], row["set_number"])).fetchone()
+        if existing is None:
+            names = list(row)
+            conn.execute(f"INSERT INTO workouts ({', '.join(names)}) "
+                         f"VALUES ({', '.join('?' * len(names))})", [row[c] for c in names])
+            res.added += 1
+            continue
+        new_vals = tuple(row[c] for c in cols)
+        conn.execute(
+            f"UPDATE workouts SET fitnotes_id = ?, {', '.join(c + ' = ?' for c in cols)} "
+            "WHERE id = ?", (row["fitnotes_id"],) + new_vals + (existing["id"],))
+        if tuple(existing)[1:] == new_vals:
+            res.unchanged += 1
+        else:
+            res.updated += 1
+            res.updated_rows.append(f"{row['date']} {row['exercise']} set {row['set_number']}")
+    ids = {r["fitnotes_id"] for r in rows}
+    res.missing_from_source = sum(
+        1 for (fid,) in conn.execute("SELECT fitnotes_id FROM workouts WHERE fitnotes_id IS NOT NULL")
+        if fid not in ids)
     conn.commit()
     return res

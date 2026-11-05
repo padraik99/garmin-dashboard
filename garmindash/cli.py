@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 
 from garmindash import db, export, fit, fitnotes
@@ -39,13 +40,16 @@ def cmd_import_fit(args) -> int:
 def cmd_import_fitnotes(args) -> int:
     conn = db.connect(args.db)
     try:
-        res = fitnotes.import_fitnotes(conn, args.csv, args.date_format)
-    except fitnotes.FitNotesError as exc:
+        res = fitnotes.import_fitnotes(conn, args.file, args.date_format)
+    except (fitnotes.FitNotesError, sqlite3.DatabaseError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     print(f"workouts: {res.added} added, {res.updated} updated, {res.unchanged} unchanged")
     for r in res.updated_rows[:20]:
         print(f"  updated: {r}")
+    if res.missing_from_source:
+        print(f"  {res.missing_from_source} sets in the db are no longer in this backup "
+              "(deleted in FitNotes?); left in place")
     return 0
 
 
@@ -100,10 +104,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("folder")
     sp.set_defaults(func=cmd_import_fit)
 
-    sp = with_db(sub.add_parser("import-fitnotes", help="import a FitNotes CSV export"))
-    sp.add_argument("csv")
+    sp = with_db(sub.add_parser("import-fitnotes", help="import a FitNotes .fitnotes backup or CSV export"))
+    sp.add_argument("file", help=".fitnotes backup or .csv export")
     sp.add_argument("--date-format", default=None,
-                    help="strptime format if dates are not YYYY-MM-DD, e.g. %%d/%%m/%%Y")
+                    help="CSV only: strptime format if dates are not YYYY-MM-DD, e.g. %%d/%%m/%%Y")
     sp.set_defaults(func=cmd_import_fitnotes)
 
     sp = sub.add_parser("inspect", help="list an export's files and flag unknown ones")
