@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "garmindash"
+version = "0.1.0"
+description = "Import Garmin and FitNotes data into SQLite for a personal dashboard"
+requires-python = ">=3.11"
+dependencies = ["fitdecode>=0.10"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools]
+packages = ["garmindash"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]
