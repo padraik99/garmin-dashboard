@@ -29,7 +29,7 @@ SETS = [  # _id, exercise_id, date, metric_weight, reps, distance, duration_seco
 ]
 
 
-def make_backup(path, sets=SETS, comments=((3, "2026-04-28", "last set hard"),),
+def make_backup(path, sets=SETS, comments=((3, "2026-04-28 19:02:11", "last set hard"),),
                 metric=None):
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
@@ -44,7 +44,8 @@ def make_backup(path, sets=SETS, comments=((3, "2026-04-28", "last set hard"),),
         "INSERT INTO training_log (_id, exercise_id, date, metric_weight, reps, distance, "
         "duration_seconds, unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", sets)
     conn.executemany("INSERT INTO Comment (owner_type_id, owner_id, date, comment) "
-                     "VALUES (1, ?, ?, ?)", comments)
+                     "VALUES (?, ?, ?, ?)",
+                     [(c[3] if len(c) > 3 else 1, c[0], c[1], c[2]) for c in comments])
     conn.commit()
     conn.close()
     return path
@@ -178,3 +179,19 @@ def test_imperial_backup_then_csv_does_not_duplicate(tmp_path, db_path):
     rows = [tuple(r) for r in conn.execute(
         "SELECT date, weight, weight_unit, comment FROM workouts ORDER BY date")]
     assert rows == [("2026-04-17", 65.0, "lb", None), ("2026-11-03", 20.0, "lb", None)]
+
+
+def test_comments_link_by_set_id_not_date(tmp_path, db_path):
+    comments = [
+        (1, "2026-05-02 08:00:00", "felt easy"),          # written days after the workout
+        (1, "2026-05-02 08:01:00", "grip slipping"),      # second comment on the same set
+        (2, "2026-04-28 19:00:00", "other owner type", 2),  # not a set comment
+        (99, "2026-04-28 19:00:00", "orphan: set deleted"),
+        (4, "2026-04-28 19:00:00", "   "),                # blank
+    ]
+    path = make_backup(tmp_path / "c.fitnotes", comments=comments)
+    conn = db.connect(db_path)
+    fitnotes.import_fitnotes(conn, path)
+    got = {r[0]: r[1] for r in conn.execute("SELECT fitnotes_id, comment FROM workouts")}
+    assert got[1] == "felt easy\ngrip slipping"
+    assert got[2] is None and got[4] is None

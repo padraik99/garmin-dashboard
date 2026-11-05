@@ -123,8 +123,12 @@ zero weight is kept (bodyweight exercises).
 FitNotes always stores weight in kg (`metric_weight`). When the app is set to
 pounds (`settings.metric = 0`), weights are converted back with FitNotes' own
 factor, 2.20462, which restores exactly what you typed (29.4835… kg → 65 lb).
-Otherwise they stay kg. Comments are not imported from backups yet: how
-`Comment` rows link to sets is still unconfirmed.
+Otherwise they stay kg. A set's comments are the `Comment` rows whose
+`owner_id` is the set's id (owner type 1); several comments on one set are
+joined with line breaks. In practice these are notes on how an exercise was
+done that day (bands, slow descent), stored on whichever set's comment
+bubble was tapped, so the dashboard should show them per exercise per day
+rather than per set.
 
 **CSV spreadsheet export.** Columns are matched by header name, so order and
 missing columns don't matter. Only `Date` and `Exercise` are required.

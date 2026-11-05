@@ -220,11 +220,12 @@ def import_fitnotes_csv(conn: sqlite3.Connection, csv_path: str | Path,
 
 SQLITE_MAGIC = b"SQLite format 3\x00"
 
-# Confirmed on a real backup: metric_weight is kg (see below). Assumed:
-# duration_seconds is seconds. Comment linkage is NOT known yet: the guess
-# below (owner_id = training_log._id, same date) matched 0 of 165 real
-# comments, so in practice no comments are imported. Distance is stored as typed, with training_log.unit naming
-# the unit per set; codes confirmed against the app so far are below.
+# Confirmed on a real backup: metric_weight is kg (see below), and a set's
+# comments are Comment rows with owner_type_id 1 and owner_id =
+# training_log._id (246 of 253 matched; Comment.date is when the comment was
+# written, not the workout date). Assumed: duration_seconds is seconds.
+# Distance is stored as typed, with training_log.unit naming the unit per
+# set; codes confirmed against the app so far are below.
 DISTANCE_UNITS = {2: "m", 5: "mi"}
 
 # metric_weight is always kg. FitNotes converts lb -> kg by dividing by
@@ -284,11 +285,14 @@ def read_backup(path: str | Path) -> list[dict]:
         missing = {"training_log", "exercise"} - tables
         if missing:
             raise FitNotesError(f"not a FitNotes backup: no {', '.join(sorted(missing))} table")
-        comments: dict[tuple, str] = {}
+        comments: dict[int, str] = {}
         if "comment" in tables:
-            for r in src.execute("SELECT owner_id, date, comment FROM Comment"):
-                if r["comment"]:
-                    comments[(r["owner_id"], r["date"])] = r["comment"].strip()
+            for r in src.execute("SELECT owner_id, comment FROM Comment "
+                                 "WHERE owner_type_id = 1 ORDER BY _id"):
+                text = (r["comment"] or "").strip()
+                if text:
+                    prev = comments.get(r["owner_id"])
+                    comments[r["owner_id"]] = f"{prev}\n{text}" if prev else text
         imperial = _is_imperial(src, tables)
         rows, counter = [], {}
         for r in src.execute(BACKUP_QUERY):
@@ -306,7 +310,7 @@ def read_backup(path: str | Path) -> list[dict]:
                 "distance": float(distance) if distance is not None else None,
                 "distance_unit": distance_unit(r["unit"]) if distance is not None else None,
                 "time_seconds": int(_positive(r["duration_seconds"]) or 0) or None,
-                "comment": comments.get((r["_id"], r["date"])),
+                "comment": comments.get(r["_id"]),
             })
         return rows
     finally:
