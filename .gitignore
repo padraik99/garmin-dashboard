@@ -1,0 +1,24 @@
+# Personal data: never commit
+*.db
+*.db-journal
+*.sqlite
+data/
+*.zip
+*.fit
+*.FIT
+*.csv
+# ...except synthetic fixtures inside tests/
+!tests/**/*.zip
+!tests/**/*.fit
+!tests/**/*.FIT
+!tests/**/*.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
