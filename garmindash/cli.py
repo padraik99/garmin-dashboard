@@ -50,6 +50,9 @@ def cmd_import_fitnotes(args) -> int:
     if res.missing_from_source:
         print(f"  {res.missing_from_source} sets in the db are no longer in this backup "
               "(deleted in FitNotes?); left in place")
+    for unit, n in sorted(res.unknown_units.items()):
+        print(f"  {n} sets have distance in an unmapped unit, stored as '{unit}'; "
+              "check one in FitNotes and add the code to DISTANCE_UNITS in garmindash/fitnotes.py")
     return 0
 
 

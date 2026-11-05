@@ -167,6 +167,7 @@ class FitNotesResult:
     unchanged: int = 0
     updated_rows: list[str] = field(default_factory=list)
     missing_from_source: int = 0   # backup only: sets in the db that the backup no longer has
+    unknown_units: dict = field(default_factory=dict)  # backup only: unmapped unit code -> sets
 
 
 def is_backup(path: str | Path) -> bool:
@@ -219,10 +220,12 @@ SQLITE_MAGIC = b"SQLite format 3\x00"
 
 # Assumed from the backup's schema (no FitNotes documentation): metric_weight
 # is kg, duration_seconds is seconds, Comment.owner_id = training_log._id for
-# set comments. distance units are not known yet, so distance_unit stays NULL.
+# set comments. Distance is stored as typed, with training_log.unit naming
+# the unit per set; codes confirmed against the app so far are below.
+DISTANCE_UNITS = {2: "m", 5: "mi"}
 BACKUP_QUERY = """
 SELECT t._id, t.date, e.name AS exercise, c.name AS category,
-       t.metric_weight, t.reps, t.distance, t.duration_seconds
+       t.metric_weight, t.reps, t.distance, t.duration_seconds, t.unit
 FROM training_log t
 JOIN exercise e ON e._id = t.exercise_id
 LEFT JOIN Category c ON c._id = e.category_id
@@ -239,6 +242,11 @@ def _open_readonly(path: str | Path) -> sqlite3.Connection:
 
 def _positive(v):
     return v if v is not None and v > 0 else None
+
+
+def distance_unit(code) -> str:
+    """Map training_log.unit to a unit name; unknown codes are kept visibly."""
+    return DISTANCE_UNITS.get(code, f"fitnotes_unit_{code}")
 
 
 def read_backup(path: str | Path) -> list[dict]:
@@ -269,7 +277,7 @@ def read_backup(path: str | Path) -> list[dict]:
                 "weight_unit": "kg" if weight is not None else None,
                 "reps": int(reps) if reps is not None else None,
                 "distance": float(distance) if distance is not None else None,
-                "distance_unit": None,
+                "distance_unit": distance_unit(r["unit"]) if distance is not None else None,
                 "time_seconds": int(_positive(r["duration_seconds"]) or 0) or None,
                 "comment": comments.get((r["_id"], r["date"])),
             })
@@ -307,6 +315,10 @@ def import_fitnotes_backup(conn: sqlite3.Connection, path: str | Path) -> FitNot
         else:
             res.updated += 1
             res.updated_rows.append(f"{row['date']} {row['exercise']} set {row['set_number']}")
+    for row in rows:
+        unit = row["distance_unit"]
+        if unit and unit.startswith("fitnotes_unit_"):
+            res.unknown_units[unit] = res.unknown_units.get(unit, 0) + 1
     ids = {r["fitnotes_id"] for r in rows}
     res.missing_from_source = sum(
         1 for (fid,) in conn.execute("SELECT fitnotes_id FROM workouts WHERE fitnotes_id IS NOT NULL")

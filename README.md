@@ -205,7 +205,7 @@ series for the dashboard.
 | `date`, `exercise`, `set_number`, `category` | |
 | `weight`, `weight_unit` | backup: always kg; CSV: as logged, `kg` or `lb` (no conversion) |
 | `reps` | |
-| `distance`, `distance_unit` | backup: raw FitNotes value, unit not yet confirmed (NULL) |
+| `distance`, `distance_unit` | as typed in FitNotes. Backup unit codes: 2 = `m`, 5 = `mi`; any other code is stored as `fitnotes_unit_<code>` and reported on import |
 | `time_seconds` | |
 | `comment` | |
 

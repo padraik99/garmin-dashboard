@@ -20,12 +20,12 @@ CREATE TABLE Comment (_id INTEGER PRIMARY KEY, date TEXT, owner_type_id INTEGER,
     owner_id INTEGER, comment TEXT);
 """
 
-SETS = [  # _id, exercise_id, date, metric_weight, reps, distance, duration_seconds
-    (1, 1, "2026-04-28", 60.0, 8, 0, 0),
-    (2, 1, "2026-04-28", 60.0, 8, 0, 0),
-    (3, 1, "2026-04-28", 62.5, 6, 0, 0),
-    (4, 2, "2026-04-28", 0.0, 0, 2500, 930),
-    (5, 3, "2026-04-30", 0.0, 10, 0, 0),
+SETS = [  # _id, exercise_id, date, metric_weight, reps, distance, duration_seconds, unit
+    (1, 1, "2026-04-28", 60.0, 8, 0, 0, 0),
+    (2, 1, "2026-04-28", 60.0, 8, 0, 0, 0),
+    (3, 1, "2026-04-28", 62.5, 6, 0, 0, 0),
+    (4, 2, "2026-04-28", 0.0, 0, 2.0, 930, 5),   # 2.0 mi
+    (5, 3, "2026-04-30", 0.0, 10, 0, 0, 0),
 ]
 
 
@@ -37,8 +37,8 @@ def make_backup(path, sets=SETS, comments=((3, "2026-04-28", "last set hard"),))
     conn.executemany("INSERT INTO exercise (_id, name, category_id) VALUES (?, ?, ?)",
                      [(1, "Flat Barbell Bench Press", 1), (2, "Treadmill", 2), (3, "Pull Up", 3)])
     conn.executemany(
-        "INSERT INTO training_log (_id, exercise_id, date, metric_weight, reps, unit, distance, "
-        "duration_seconds) VALUES (?, ?, ?, ?, ?, 0, ?, ?)", sets)
+        "INSERT INTO training_log (_id, exercise_id, date, metric_weight, reps, distance, "
+        "duration_seconds, unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", sets)
     conn.executemany("INSERT INTO Comment (owner_type_id, owner_id, date, comment) "
                      "VALUES (1, ?, ?, ?)", comments)
     conn.commit()
@@ -69,7 +69,9 @@ def test_import_backup(backup, db_path):
             bench["reps"], bench["comment"]) == (
         "Flat Barbell Bench Press", "Chest", 62.5, "kg", 6, "last set hard")
     tread = rows[3]
-    assert (tread["distance"], tread["time_seconds"], tread["reps"]) == (2500.0, 930, None)
+    assert (tread["distance"], tread["distance_unit"], tread["time_seconds"], tread["reps"]) == (
+        2.0, "mi", 930, None)
+    assert rows[0]["distance"] is None and rows[0]["distance_unit"] is None
     assert rows[4]["weight"] == 0.0 and rows[4]["reps"] == 10  # bodyweight pull-up
 
 
@@ -83,8 +85,8 @@ def test_newer_backup_adds_new_updates_edited_reports_deleted(backup, tmp_path, 
     conn = db.connect(db_path)
     fitnotes.import_fitnotes(conn, backup)
     newer = [s for s in SETS if s[0] != 2]                     # set 2 deleted
-    newer = [(3, 1, "2026-04-28", 62.5, 7, 0, 0) if s[0] == 3 else s for s in newer]  # edited
-    newer.append((6, 1, "2026-05-01", 65.0, 5, 0, 0))         # new
+    newer = [(3, 1, "2026-04-28", 62.5, 7, 0, 0, 0) if s[0] == 3 else s for s in newer]  # edited
+    newer.append((6, 1, "2026-05-01", 65.0, 5, 0, 0, 0))         # new
     res = fitnotes.import_fitnotes(conn, make_backup(tmp_path / "newer.fitnotes", newer))
     assert (res.added, res.updated, res.missing_from_source) == (1, 1, 1)
     # set 3 moved from position 3 to 2 after the deletion, so both its reps and set_number changed
@@ -118,3 +120,18 @@ def test_cli_backup_and_bad_sqlite(backup, tmp_path, capsys):
     sqlite3.connect(other).execute("CREATE TABLE t (x)").connection.close()
     assert main(["import-fitnotes", str(other), "--db", dbp]) == 2
     assert "not a FitNotes backup" in capsys.readouterr().err
+
+
+def test_distance_unit_codes(tmp_path, db_path, capsys):
+    sets = [(1, 2, "2026-04-06", 0.0, 0, 50.0, 600, 2),    # 50 m
+            (2, 2, "2026-04-11", 0.0, 0, 2.0, 0, 5),       # 2 mi
+            (3, 2, "2026-04-12", 0.0, 0, 3.0, 0, 9)]       # unmapped code
+    path = make_backup(tmp_path / "u.fitnotes", sets, comments=())
+    dbp = str(db_path)
+    assert main(["import-fitnotes", str(path), "--db", dbp]) == 0
+    out = capsys.readouterr().out
+    assert "1 sets have distance in an unmapped unit, stored as 'fitnotes_unit_9'" in out
+    conn = db.connect(db_path)
+    units = [tuple(r) for r in conn.execute(
+        "SELECT distance, distance_unit FROM workouts ORDER BY fitnotes_id")]
+    assert units == [(50.0, "m"), (2.0, "mi"), (3.0, "fitnotes_unit_9")]
