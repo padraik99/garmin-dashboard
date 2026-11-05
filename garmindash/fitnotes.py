@@ -220,11 +220,36 @@ def import_fitnotes_csv(conn: sqlite3.Connection, csv_path: str | Path,
 
 SQLITE_MAGIC = b"SQLite format 3\x00"
 
-# Assumed from the backup's schema (no FitNotes documentation): metric_weight
-# is kg, duration_seconds is seconds, Comment.owner_id = training_log._id for
-# set comments. Distance is stored as typed, with training_log.unit naming
+# Confirmed on a real backup: metric_weight is kg (see below). Assumed:
+# duration_seconds is seconds. Comment linkage is NOT known yet: the guess
+# below (owner_id = training_log._id, same date) matched 0 of 165 real
+# comments, so in practice no comments are imported. Distance is stored as typed, with training_log.unit naming
 # the unit per set; codes confirmed against the app so far are below.
 DISTANCE_UNITS = {2: "m", 5: "mi"}
+
+# metric_weight is always kg. FitNotes converts lb -> kg by dividing by
+# 2.20462 (10 lb is stored as 4.535929094..., i.e. 10 / 2.20462, not the exact
+# 10 / 2.20462262), so multiplying by the same factor restores the typed value.
+FITNOTES_LB_PER_KG = 2.20462
+
+
+def _weight(kg, imperial: bool):
+    if kg is None:
+        return None, None
+    if imperial:
+        return round(kg * FITNOTES_LB_PER_KG, 2), "lb"
+    return round(float(kg), 3), "kg"
+
+
+def _is_imperial(src: sqlite3.Connection, tables: set[str]) -> bool:
+    """settings.metric = 0 means the app is set to lb (confirmed on a real backup)."""
+    if "settings" not in tables:
+        return False
+    try:
+        row = src.execute("SELECT metric FROM settings LIMIT 1").fetchone()
+    except sqlite3.Error:
+        return False
+    return row is not None and row[0] == 0
 BACKUP_QUERY = """
 SELECT t._id, t.date, e.name AS exercise, c.name AS category,
        t.metric_weight, t.reps, t.distance, t.duration_seconds, t.unit
@@ -264,19 +289,19 @@ def read_backup(path: str | Path) -> list[dict]:
             for r in src.execute("SELECT owner_id, date, comment FROM Comment"):
                 if r["comment"]:
                     comments[(r["owner_id"], r["date"])] = r["comment"].strip()
+        imperial = _is_imperial(src, tables)
         rows, counter = [], {}
         for r in src.execute(BACKUP_QUERY):
             date = parse_date(str(r["date"]), None)
             key = (date, r["exercise"])
             counter[key] = counter.get(key, 0) + 1
-            weight = r["metric_weight"]
+            weight, weight_unit = _weight(r["metric_weight"], imperial)
             reps = _positive(r["reps"])
             distance = _positive(r["distance"])
             rows.append({
                 "fitnotes_id": r["_id"], "date": date, "exercise": r["exercise"],
                 "set_number": counter[key], "category": r["category"],
-                "weight": float(weight) if weight is not None else None,
-                "weight_unit": "kg" if weight is not None else None,
+                "weight": weight, "weight_unit": weight_unit,
                 "reps": int(reps) if reps is not None else None,
                 "distance": float(distance) if distance is not None else None,
                 "distance_unit": distance_unit(r["unit"]) if distance is not None else None,

@@ -114,12 +114,17 @@ extension.
 
 **`.fitnotes` backup (preferred).** This is a SQLite database. It's opened
 read-only and never modified. Sets come from `training_log`, joined to
-`exercise` and `Category` for names, plus set comments from `Comment`. Each
-set keeps FitNotes' own id (`fitnotes_id`), so re-importing a newer backup
-adds new sets and updates edited ones exactly. Sets deleted in FitNotes are
-counted and reported but left in the database. Weight is FitNotes'
-`metric_weight`, stored as kg whatever unit you log in. Zero reps, distance or
-duration are stored as NULL; zero weight is kept (bodyweight exercises).
+`exercise` and `Category` for names. Each set keeps FitNotes' own id
+(`fitnotes_id`), so re-importing a newer backup adds new sets and updates
+edited ones exactly. Sets deleted in FitNotes are counted and reported but
+left in the database. Zero reps, distance or duration are stored as NULL;
+zero weight is kept (bodyweight exercises).
+
+FitNotes always stores weight in kg (`metric_weight`). When the app is set to
+pounds (`settings.metric = 0`), weights are converted back with FitNotes' own
+factor, 2.20462, which restores exactly what you typed (29.4835… kg → 65 lb).
+Otherwise they stay kg. Comments are not imported from backups yet: how
+`Comment` rows link to sets is still unconfirmed.
 
 **CSV spreadsheet export.** Columns are matched by header name, so order and
 missing columns don't matter. Only `Date` and `Exercise` are required.
@@ -226,7 +231,7 @@ series for the dashboard.
 |--------|-------|
 | `fitnotes_id` | `training_log._id` from a backup; NULL for CSV-only rows |
 | `date`, `exercise`, `set_number`, `category` | |
-| `weight`, `weight_unit` | backup: always kg; CSV: as logged, `kg` or `lb` (no conversion) |
+| `weight`, `weight_unit` | backup: `lb` if the app is set to pounds, else `kg`; CSV: as logged, `kg` or `lb` (no conversion) |
 | `reps` | |
 | `distance`, `distance_unit` | as typed in FitNotes. Backup unit codes: 2 = `m`, 5 = `mi`; any other code is stored as `fitnotes_unit_<code>` and reported on import |
 | `time_seconds` | |

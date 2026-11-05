@@ -29,9 +29,13 @@ SETS = [  # _id, exercise_id, date, metric_weight, reps, distance, duration_seco
 ]
 
 
-def make_backup(path, sets=SETS, comments=((3, "2026-04-28", "last set hard"),)):
+def make_backup(path, sets=SETS, comments=((3, "2026-04-28", "last set hard"),),
+                metric=None):
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
+    if metric is not None:
+        conn.execute("CREATE TABLE settings (_id INTEGER PRIMARY KEY, metric INTEGER)")
+        conn.execute("INSERT INTO settings (metric) VALUES (?)", (metric,))
     conn.executemany("INSERT INTO Category (_id, name) VALUES (?, ?)",
                      [(1, "Chest"), (2, "Cardio"), (3, "Back")])
     conn.executemany("INSERT INTO exercise (_id, name, category_id) VALUES (?, ?, ?)",
@@ -135,3 +139,42 @@ def test_distance_unit_codes(tmp_path, db_path, capsys):
     units = [tuple(r) for r in conn.execute(
         "SELECT distance, distance_unit FROM workouts ORDER BY fitnotes_id")]
     assert units == [(50.0, "m"), (2.0, "mi"), (3.0, "fitnotes_unit_9")]
+
+
+def test_imperial_backup_restores_typed_pounds(tmp_path, db_path):
+    # Real stored values from a FitNotes backup set to lb: 65, 30, 10, 45, 40 lb.
+    kgs = [29.483539113316585, 13.607787283069193, 4.535929094356398,
+           20.41168092460379, 18.14371637742559]
+    sets = [(i, 1, "2026-04-17", kg, 8, 0, 0, 0) for i, kg in enumerate(kgs, start=1)]
+    path = make_backup(tmp_path / "lb.fitnotes", sets, comments=(), metric=0)
+    conn = db.connect(db_path)
+    fitnotes.import_fitnotes(conn, path)
+    got = [tuple(r) for r in conn.execute(
+        "SELECT weight, weight_unit FROM workouts ORDER BY fitnotes_id")]
+    assert got == [(65.0, "lb"), (30.0, "lb"), (10.0, "lb"), (45.0, "lb"), (40.0, "lb")]
+
+
+def test_metric_backup_stays_kg(tmp_path, db_path):
+    path = make_backup(tmp_path / "kg.fitnotes", [(1, 1, "2026-04-17", 60.0, 8, 0, 0, 0)],
+                       comments=(), metric=1)
+    conn = db.connect(db_path)
+    fitnotes.import_fitnotes(conn, path)
+    assert tuple(conn.execute("SELECT weight, weight_unit FROM workouts").fetchone()) == (60.0, "kg")
+
+
+def test_imperial_backup_then_csv_does_not_duplicate(tmp_path, db_path):
+    path = make_backup(tmp_path / "lb.fitnotes",
+                       [(1, 1, "2026-04-17", 29.483539113316585, 8, 0, 0, 0)],
+                       comments=(), metric=0)
+    csv = tmp_path / "e.csv"
+    csv.write_text("Date,Exercise,Category,Weight,Weight Unit,Reps,Distance,Distance Unit,"
+                   "Time,Comment\n"
+                   '2026-04-17,Flat Barbell Bench Press,Chest,65.0,lbs,8,,,,""\n'
+                   '2026-11-03,Goblet Squat,Legs,20.0,lbs,10,,,,""\n')
+    conn = db.connect(db_path)
+    fitnotes.import_fitnotes(conn, path)
+    res = fitnotes.import_fitnotes(conn, csv)
+    assert (res.added, res.unchanged) == (1, 1)
+    rows = [tuple(r) for r in conn.execute(
+        "SELECT date, weight, weight_unit, comment FROM workouts ORDER BY date")]
+    assert rows == [("2026-04-17", 65.0, "lb", None), ("2026-11-03", 20.0, "lb", None)]
